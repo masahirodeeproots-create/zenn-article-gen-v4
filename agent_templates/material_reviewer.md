@@ -81,8 +81,20 @@ customizable_sections:
 4. 同じ問題が複数素材にまたがる場合は1つのissueにまとめる
 5. overall_scoreは0.0〜1.0で算出（criticalが1つでもあれば0.5以下）
 
-### 注意事項
-- 出力のJSON部分は必ず ```json``` ブロックで囲む
+### ⚠️ 注意事項（必ず守ること）
+
+**JSONブロックが含まれないレビューは無効として扱われます。必ず以下の形式のJSONを含めてください。**
+
+出力例1（問題あり）:
+```json
+{"issues": [{"id": "MAT-001", "category": "depth", "detail": "失敗エピソードが表面的", "severity": "major", "resolved": false}]}
+```
+
+出力例2（前回指摘が解消）:
+```json
+{"issues": [{"id": "MAT-001", "category": "depth", "detail": "失敗の根本原因が追記された", "severity": "major", "resolved": true}]}
+```
+
 - issues配列は severity: critical → major → minor の順にソートする
 - 出力はすべて日本語（JSONのvalue部分）
 

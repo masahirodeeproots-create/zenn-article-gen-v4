@@ -91,8 +91,25 @@ material_reviewerへの差し戻し判断に使用される。
 - シミュレーションログに説得力がない
 - 素材に含まれない情報が必要
 
-### 注意事項
-- JSONは ```json``` ブロックで囲む
+### ⚠️ 注意事項（必ず守ること）
+
+**JSONブロックが含まれないレビューは無効として扱われます。必ず以下の形式のJSONを含めてください。**
+
+出力例1（major指摘あり）:
+```json
+{"issues": [{"id": "ART-001", "category": "style", "detail": "です・ます比率が63%で閾値80%未満", "severity": "major", "resolved": false}, {"id": "ART-002", "category": "flow", "detail": "シナリオBとCの構成が同一パターン", "severity": "minor", "resolved": false}]}
+```
+
+出力例2（前回指摘が解消された場合）:
+```json
+{"issues": [{"id": "ART-001", "category": "style", "detail": "です・ます比率が82%で改善", "severity": "major", "resolved": true}, {"id": "ART-003", "category": "hook", "detail": "冒頭フックが弱い", "severity": "major", "resolved": false}]}
+```
+
+出力例3（問題なし）:
+```json
+{"issues": []}
+```
+
 - issues配列はseverity順にソート
 - MATERIAL_ISSUEは該当時のみ出力（なければセクション自体を省略）
 - ベンチマーク比較は率直な感想ベース（チェックリスト評価はしない）

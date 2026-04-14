@@ -115,7 +115,33 @@ class RunState:
     metrics_history: dict = field(default_factory=dict)
     fb_log: dict = field(default_factory=dict)
     fb_diff_history: dict = field(default_factory=dict)
+    axis_scores_history: dict = field(default_factory=dict)  # {phase_name: [{軸名: score}, ...]}
     log: list = field(default_factory=list)
+    token_usage: dict = field(default_factory=lambda: {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_cache_creation_tokens": 0,
+        "total_cache_read_tokens": 0,
+        "total_cost_usd": 0.0,
+        "by_agent": {},
+    })
+
+    def record_tokens(self, agent_name: str, usage: dict, cost: float):
+        """エージェント呼び出しのトークン消費を記録"""
+        self.token_usage["total_input_tokens"] += usage.get("input_tokens", 0)
+        self.token_usage["total_output_tokens"] += usage.get("output_tokens", 0)
+        self.token_usage["total_cache_creation_tokens"] += usage.get("cache_creation_input_tokens", 0)
+        self.token_usage["total_cache_read_tokens"] += usage.get("cache_read_input_tokens", 0)
+        self.token_usage["total_cost_usd"] += cost
+        if agent_name not in self.token_usage["by_agent"]:
+            self.token_usage["by_agent"][agent_name] = {
+                "input_tokens": 0, "output_tokens": 0, "cost": 0.0, "calls": 0,
+            }
+        ag = self.token_usage["by_agent"][agent_name]
+        ag["input_tokens"] += usage.get("input_tokens", 0)
+        ag["output_tokens"] += usage.get("output_tokens", 0)
+        ag["cost"] += cost
+        ag["calls"] += 1
 
     def add_score(self, phase_name: str, score: float):
         if phase_name not in self.scores:
@@ -192,31 +218,58 @@ def clean_runtime_dirs():
 # エージェント呼び出し基盤 (Phase 1)
 # ============================================================
 
-def call_agent(name: str, prompt: str, model: str = "sonnet", timeout: int = DEFAULT_TIMEOUT) -> str:
+def _parse_agent_output(raw_stdout: str, name: str, state: Optional[RunState] = None) -> str:
+    """JSON出力をパースしてテキストを返す。トークン計測をstateに記録。"""
+    try:
+        data = json.loads(raw_stdout)
+    except (json.JSONDecodeError, TypeError):
+        # フォールバック: JSON非対応CLIバージョンの場合、生テキストとして返す
+        return raw_stdout
+
+    # is_errorチェック（returncode=0でもエラーの場合がある）
+    if data.get("is_error"):
+        raise AgentExecutionError(f"Agent {name} returned is_error=true: {data.get('result', '')[:300]}")
+
+    # トークン計測
+    if state and "usage" in data:
+        state.record_tokens(name, data["usage"], data.get("total_cost_usd", 0.0))
+
+    text = data.get("result", "").strip()
+    cost = data.get("total_cost_usd", 0)
+    usage = data.get("usage", {})
+    in_tok = usage.get("input_tokens", 0) + usage.get("cache_creation_input_tokens", 0) + usage.get("cache_read_input_tokens", 0)
+    out_tok = usage.get("output_tokens", 0)
+    log(f"  tokens: {in_tok} in / {out_tok} out / ${cost:.4f}")
+    return text
+
+
+def call_agent(name: str, prompt: str, model: str = "sonnet", timeout: int = DEFAULT_TIMEOUT,
+               state: Optional[RunState] = None) -> str:
     log(f"CALL {name} (model={model})")
     try:
         result = subprocess.run(
             ["claude", "-p", prompt, "--model", model,
-             "--output-format", "text", "--permission-mode", "bypassPermissions",
-             "--max-turns", "30", "--add-dir", str(PROJECT_ROOT)],
+             "--output-format", "json", "--permission-mode", "bypassPermissions",
+             "--max-turns", "30"],
             capture_output=True, text=True, cwd=str(PROJECT_ROOT), timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         raise AgentTimeoutError(f"Agent {name} timed out after {timeout}s")
     if result.returncode != 0:
         raise AgentExecutionError(f"Agent {name} failed (rc={result.returncode}): {result.stderr[:500]}")
-    output = result.stdout
+    output = _parse_agent_output(result.stdout, name, state)
     log(f"DONE {name} ({len(output)} chars)")
     return output
 
 
-async def call_agent_async(name: str, prompt: str, model: str = "sonnet", timeout: int = DEFAULT_TIMEOUT) -> str:
+async def call_agent_async(name: str, prompt: str, model: str = "sonnet", timeout: int = DEFAULT_TIMEOUT,
+                           state: Optional[RunState] = None) -> str:
     log(f"CALL_ASYNC {name} (model={model})")
     try:
         proc = await asyncio.create_subprocess_exec(
             "claude", "-p", prompt, "--model", model,
-            "--output-format", "text", "--permission-mode", "bypassPermissions",
-            "--max-turns", "30", "--add-dir", str(PROJECT_ROOT),
+            "--output-format", "json", "--permission-mode", "bypassPermissions",
+            "--max-turns", "30",
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             cwd=str(PROJECT_ROOT),
         )
@@ -226,16 +279,17 @@ async def call_agent_async(name: str, prompt: str, model: str = "sonnet", timeou
         raise AgentTimeoutError(f"Agent {name} timed out after {timeout}s")
     if proc.returncode != 0:
         raise AgentExecutionError(f"Agent {name} failed (rc={proc.returncode}): {stderr.decode()[:500]}")
-    output = stdout.decode()
+    output = _parse_agent_output(stdout.decode(), name, state)
     log(f"DONE_ASYNC {name} ({len(output)} chars)")
     return output
 
 
 def call_agent_with_retry(name: str, prompt: str, model: str = "sonnet",
-                          timeout: int = DEFAULT_TIMEOUT, max_retries: int = 3) -> str:
+                          timeout: int = DEFAULT_TIMEOUT, max_retries: int = 3,
+                          state: Optional[RunState] = None) -> str:
     for attempt in range(max_retries):
         try:
-            return call_agent(name, prompt, model, timeout)
+            return call_agent(name, prompt, model, timeout, state=state)
         except AgentExecutionError:
             if attempt == max_retries - 1:
                 raise
@@ -247,10 +301,11 @@ def call_agent_with_retry(name: str, prompt: str, model: str = "sonnet",
 
 
 async def call_agent_async_with_retry(name: str, prompt: str, model: str = "sonnet",
-                                       timeout: int = DEFAULT_TIMEOUT, max_retries: int = 3) -> str:
+                                       timeout: int = DEFAULT_TIMEOUT, max_retries: int = 3,
+                                       state: Optional[RunState] = None) -> str:
     for attempt in range(max_retries):
         try:
-            return await call_agent_async(name, prompt, model, timeout)
+            return await call_agent_async(name, prompt, model, timeout, state=state)
         except AgentExecutionError:
             if attempt == max_retries - 1:
                 raise
@@ -416,6 +471,7 @@ def write_agent_memory(run_id: str, state: RunState, registry: "AgentRegistry"):
         "article_type": state.article_type, "user_instruction": state.user_instruction,
         "agents_used": agents_used,
         "final_score": state.get_scores("article_review")[-1] if state.get_scores("article_review") else 0.0,
+        "score_by_axis": {p: axes[-1] if axes else {} for p, axes in state.axis_scores_history.items()},
         "iterations_used": {p: len(s) for p, s in state.scores.items()},
         "escalations": {p: state.is_escalated(p) for p in state.scores},
         "fb_summary": fb_summary, "human_feedback": None,
@@ -491,6 +547,7 @@ def save_summary(run_id: str, state: RunState, partial: bool = False, error: str
         "user_instruction": state.user_instruction, "scores": state.scores,
         "escalations": state.escalated,
         "metrics_history": {str(k): v for k, v in state.metrics_history.items()},
+        "token_usage": state.token_usage,
         "partial": partial, "completed_at": datetime.now().isoformat(),
     }
     if error:
@@ -583,11 +640,18 @@ def compute_code_ratio(text: str) -> float:
 
 
 def compute_desu_masu_ratio(text: str) -> float:
-    sentences = re.split(r'[。！？\n]', text)
+    # コードブロックを除去
+    text_no_code = re.sub(r'```.*?```', '', text, flags=re.DOTALL)
+    # テーブル行を除去
+    lines = [l for l in text_no_code.split('\n') if not l.strip().startswith('|')]
+    clean_text = '\n'.join(lines)
+    sentences = re.split(r'[。！？\n]', clean_text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
     if not sentences:
         return 1.0
-    dm = sum(1 for s in sentences if re.search(r'(です|ます|でした|ました|でしょう|ません)\s*$', s))
+    # 末尾の括弧・記号を無視してです・ます体を検出
+    dm = sum(1 for s in sentences if re.search(
+        r'(です|ます|でした|ました|でしょう|ません|でしょうか|ませんか)\s*[）)」』\s]*$', s))
     return dm / len(sentences)
 
 
@@ -719,6 +783,13 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
             style_rules = sg.read_text(encoding="utf-8") if sg.exists() else ""
 
     prompt = f"あなたは {agent_name} エージェントです。\n\n{definition}\n\n## プロジェクトルート\n{PROJECT_ROOT}\n\n"
+    if agent_name == "writer":
+        prompt += ("## 【絶対ルール — 文体】\n"
+                   "- 全文をです・ます体で書くこと。「〜です」「〜ます」「〜ました」「〜でしょう」で終わる文を基本とする\n"
+                   "- 「だ」「である」「した。」「なかった。」（だ/である調）は1文も使わないこと\n"
+                   "- 体言止め（名詞で文を終える）も禁止\n"
+                   "- カジュアル表現（「〜なんですよね」「まあ正直」「で、結局〜」）は許可\n"
+                   "- このルールは他の全てのルールより優先する\n\n")
     if style_rules:
         prompt += f"## Style Guide（フィルタ済み）\n\n{style_rules}\n\n"
     if "reviewer" in agent_name:
@@ -735,6 +806,65 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
             fp = MATERIALS_DIR / fn
             if fp.exists():
                 prompt += f"## 素材: {fn}\n\n{fp.read_text(encoding='utf-8')}\n\n"
+
+    # code_analyzer: ソースファイルを埋め込む
+    if agent_name == "code_analyzer":
+        src = Path(state.source_dir) if Path(state.source_dir).is_absolute() else PROJECT_ROOT / state.source_dir
+        if src.is_dir():
+            for f in sorted(src.iterdir()):
+                if f.is_file() and f.suffix in (".md", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".txt"):
+                    prompt += f"## ソースファイル: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
+        prompt += f"## 出力\n以下の5ファイルの内容をそれぞれ見出し付きで出力してください:\n- system_overview.md\n- metrics.md\n- architecture.md\n- code_examples.md\n- comparisons.md\n\n"
+
+    # trend_searcher: knowledge/とstrategy.mdを埋め込む
+    if agent_name == "trend_searcher":
+        strat = PROJECT_ROOT / "strategy.md"
+        if strat.exists():
+            prompt += f"## 戦略\n\n{strat.read_text(encoding='utf-8')}\n\n"
+        for fn in ["trends.md", "reader_pains.md"]:
+            kp = KNOWLEDGE_DIR / fn
+            if kp.exists():
+                content = kp.read_text(encoding="utf-8")[:5000]
+                prompt += f"## 既存knowledge: {fn}\n\n{content}\n\n"
+        prompt += "## 出力\nトレンドと読者ペインの調査結果を出力してください。\n\n"
+
+    # dev_simulator: ソース+素材を埋め込む
+    if agent_name == "dev_simulator":
+        src = Path(state.source_dir) if Path(state.source_dir).is_absolute() else PROJECT_ROOT / state.source_dir
+        if src.is_dir():
+            for f in sorted(src.iterdir()):
+                if f.is_file() and f.suffix in (".md", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".txt"):
+                    prompt += f"## ソースファイル: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
+        for fn in ["trend_context.md", "reader_pain.md"]:
+            fp = MATERIALS_DIR / fn
+            if fp.exists():
+                prompt += f"## 素材: {fn}\n\n{fp.read_text(encoding='utf-8')}\n\n"
+        fixed = MATERIALS_DIR / "fixed" / "system_overview.md"
+        if fixed.exists():
+            prompt += f"## 素材: system_overview.md\n\n{fixed.read_text(encoding='utf-8')}\n\n"
+        prompt += "## 出力\n開発シミュレーションの対話ログを出力してください。\n\n"
+
+    # material_updater: レビュー結果+素材を埋め込む（素材ファイルの上書きが必要）
+    if agent_name == "material_updater":
+        for f in (MATERIALS_DIR / "fixed").glob("*.md"):
+            prompt += f"## 現在の素材: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
+        sim_log = MATERIALS_DIR / "dev_simulation_log.md"
+        if sim_log.exists():
+            prompt += f"## 現在の素材: dev_simulation_log.md\n\n{sim_log.read_text(encoding='utf-8')[:5000]}\n\n"
+
+    # style_guide_updater: style_guide.mdを埋め込む
+    if agent_name == "style_guide_updater":
+        sg = STYLE_MEMORY_DIR / "style_guide.md"
+        if sg.exists():
+            prompt += f"## 現在のstyle_guide.md\n\n{sg.read_text(encoding='utf-8')}\n\n"
+
+    # consolidator: style_guide.mdを埋め込む
+    if agent_name == "consolidator":
+        sg = STYLE_MEMORY_DIR / "style_guide.md"
+        if sg.exists():
+            prompt += f"## 現在のstyle_guide.md（圧縮対象）\n\n{sg.read_text(encoding='utf-8')}\n\n"
+        prompt += "## 出力\n圧縮後のstyle_guide.md全文を出力してください。\n\n"
+
     return prompt
 
 
@@ -804,7 +934,7 @@ def call_strategist_plan(source_dir: str, user_instruction: str, state: RunState
               "- material_references (file + reason)\n- style_references (file + reason)\n"
               "- winning_strategy, death_patterns\n- priority_style_categories\n")
 
-    output = call_agent_with_retry("strategist", prompt)
+    output = call_agent_with_retry("strategist", prompt, state=state)
     sp = PROJECT_ROOT / "strategy.md"
     if not sp.exists():
         sp.write_text(output, encoding="utf-8")
@@ -829,7 +959,7 @@ def call_agent_editor(filtered_memory: list, state: RunState):
               "各エージェント定義にはフロントマター（name, base_template, type, phase）を含めてください。\n\n"
               'workflow.json形式:\n{"phases": [{"name": "...", "agents": [...], "loop": false, "parallel": false}, ...]}\n')
 
-    call_agent_with_retry("agent_editor", prompt)
+    call_agent_with_retry("agent_editor", prompt, state=state)
 
     # デフォルトworkflow.json
     wf_path = AGENTS_GENERATED_DIR / "workflow.json"
@@ -879,7 +1009,7 @@ def call_eval_designer(filtered_memory: list, state: RunState):
               f"## 戦略\n{strategy}\n\n## 参考記事\n{ref_text}\n\n## Style Guide\n{style_guide}\n\n"
               f"## 過去の実行記録\n{mem_text}\n\n"
               f"## 出力\n{PROJECT_ROOT / 'eval_criteria.md'} にeval_criteria.mdを保存してください。\n")
-    output = call_agent_with_retry("eval_designer", prompt)
+    output = call_agent_with_retry("eval_designer", prompt, state=state)
     ec = PROJECT_ROOT / "eval_criteria.md"
     if not ec.exists():
         ec.write_text(output, encoding="utf-8")
@@ -894,7 +1024,7 @@ def call_strategist_retrospective(state: RunState):
               f"## 出力\n{STYLE_MEMORY_DIR / 'learning_log.md'} に以下を追記:\n"
               f"## run_{state.run_id}: {state.article_type}\n"
               "### 勝ち筋の実現度\n### 評価軸の妥当性\n### カスタムエージェントの効果\n### FB残存率の分析\n### 次回への学び\n")
-    call_agent_with_retry("strategist", prompt)
+    call_agent_with_retry("strategist", prompt, state=state)
 
 
 def call_strategist_escalation(phase_name: str, state: RunState, scores: list,
@@ -911,7 +1041,7 @@ def call_strategist_escalation(phase_name: str, state: RunState, scores: list,
     ec = (PROJECT_ROOT / "eval_criteria.md").read_text(encoding="utf-8") if (PROJECT_ROOT / "eval_criteria.md").exists() else ""
     options = ESCALATION_OPTIONS["material_review"] if "material" in phase_name else ESCALATION_OPTIONS["article"]
     prompt = build_escalation_prompt(phase_name, scores, latest_review, ec, options, fb_diff)
-    return call_agent_with_retry("strategist", prompt)
+    return call_agent_with_retry("strategist", prompt, state=state)
 
 
 # ============================================================
@@ -978,10 +1108,11 @@ def execute_sequential(phase: dict, registry: AgentRegistry, state: RunState):
     for an in phase["agents"]:
         ad = registry.get(an)
         prompt = build_agent_prompt(an, ad, state)
-        output = call_agent_with_retry(an, prompt)
+        output = call_agent_with_retry(an, prompt, state=state)
         registry.update_status(an, "completed")
         registry.increment_invocations(an)
         registry.record_output_size(an, len(output))
+        _save_agent_output(an, output)
         verify_agent_outputs(an, ad)
 
 
@@ -990,19 +1121,82 @@ async def execute_parallel(phase: dict, registry: AgentRegistry, state: RunState
     for an in phase["agents"]:
         ad = registry.get(an)
         prompt = build_agent_prompt(an, ad, state)
-        tasks.append(_run_agent_async(an, prompt, registry))
+        tasks.append(_run_agent_async(an, prompt, registry, state))
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for i, r in enumerate(results):
         if isinstance(r, Exception):
             raise r
 
 
-async def _run_agent_async(name: str, prompt: str, registry: AgentRegistry) -> str:
-    output = await call_agent_async_with_retry(name, prompt)
+async def _run_agent_async(name: str, prompt: str, registry: AgentRegistry,
+                           state: Optional[RunState] = None) -> str:
+    output = await call_agent_async_with_retry(name, prompt, state=state)
     registry.update_status(name, "completed")
     registry.increment_invocations(name)
     registry.record_output_size(name, len(output))
+    _save_agent_output(name, output)
     return output
+
+
+def _save_agent_output(agent_name: str, output: str):
+    """--add-dir廃止に伴い、エージェント出力をorchestrator側でファイルに保存する"""
+    if not output or not output.strip():
+        return
+
+    if agent_name == "code_analyzer":
+        fixed_dir = MATERIALS_DIR / "fixed"
+        fixed_dir.mkdir(parents=True, exist_ok=True)
+        # セクション見出しで分割を試みる
+        file_map = {
+            "system_overview": "system_overview.md",
+            "metrics": "metrics.md",
+            "architecture": "architecture.md",
+            "code_examples": "code_examples.md",
+            "comparisons": "comparisons.md",
+        }
+        # ##見出しで分割
+        sections = re.split(r'^#{1,3}\s+', output, flags=re.MULTILINE)
+        section_headers = re.findall(r'^(#{1,3}\s+.+)$', output, re.MULTILINE)
+        saved_any = False
+        for i, header in enumerate(section_headers):
+            header_lower = header.lower()
+            for key, fname in file_map.items():
+                if key.replace("_", " ") in header_lower or key in header_lower:
+                    content = sections[i + 1] if i + 1 < len(sections) else ""
+                    (fixed_dir / fname).write_text(content.strip(), encoding="utf-8")
+                    saved_any = True
+                    break
+        # フォールバック: 分割できなければ全文をsystem_overview.mdに
+        if not saved_any:
+            (fixed_dir / "system_overview.md").write_text(output, encoding="utf-8")
+        # 空ファイルがあれば最低限のプレースホルダーを入れる
+        for fname in file_map.values():
+            fp = fixed_dir / fname
+            if not fp.exists() or fp.stat().st_size == 0:
+                fp.write_text(f"（{fname}: code_analyzerの出力から抽出できませんでした）", encoding="utf-8")
+
+    elif agent_name == "trend_searcher":
+        # trend_context.md と reader_pain.md に保存
+        if not (MATERIALS_DIR / "trend_context.md").exists():
+            (MATERIALS_DIR / "trend_context.md").write_text(output, encoding="utf-8")
+        if not (MATERIALS_DIR / "reader_pain.md").exists():
+            (MATERIALS_DIR / "reader_pain.md").write_text(output[:2000], encoding="utf-8")
+
+    elif agent_name == "dev_simulator":
+        if not (MATERIALS_DIR / "dev_simulation_log.md").exists():
+            (MATERIALS_DIR / "dev_simulation_log.md").write_text(output, encoding="utf-8")
+
+    elif agent_name == "style_guide_updater":
+        sg = STYLE_MEMORY_DIR / "style_guide.md"
+        # style_guide.md全文が含まれている場合のみ上書き（報告テキストでの上書きを防止）
+        lines = output.strip().split("\n")
+        if len(lines) >= 10 and ("# Style Guide" in output or "## IMPORTANT" in output or "## Learned" in output):
+            sg.write_text(output, encoding="utf-8")
+
+    elif agent_name == "consolidator":
+        sg = STYLE_MEMORY_DIR / "style_guide.md"
+        if output.strip() and len(output) > 50:
+            sg.write_text(output, encoding="utf-8")
 
 
 def verify_agent_outputs(agent_name: str, agent_def: dict):
@@ -1058,6 +1252,11 @@ def execute_pdca_loop(phase: dict, registry: AgentRegistry, state: RunState):
         score = result["overall_score"]
         state.add_score(pn, score)
         scores = state.get_scores(pn)
+        # 軸別スコアを蓄積
+        if result.get("scores_by_axis"):
+            if pn not in state.axis_scores_history:
+                state.axis_scores_history[pn] = []
+            state.axis_scores_history[pn].append(result["scores_by_axis"])
         log(f"Score: {score:.1f}/10")
 
         # MATERIAL_ISSUE即時差し戻し
@@ -1128,7 +1327,7 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
         rp = build_agent_prompt("material_reviewer", registry.get("material_reviewer"), state)
         rp += f"\n\n## イテレーション: {iteration}\n素材を評価して {MATERIAL_REVIEWS_DIR / f'review_{iteration}.md'} に出力してください。\n"
         rp += "\nレビューには ```json ``` ブロックでFB構造化データを含めてください。\n"
-        ro = call_agent_with_retry("material_reviewer", rp)
+        ro = call_agent_with_retry("material_reviewer", rp, state=state)
         registry.increment_invocations("material_reviewer")
 
         review_path = MATERIAL_REVIEWS_DIR / f"review_{iteration}.md"
@@ -1160,9 +1359,19 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
                     up += f"- 未解消の指摘（今回必ず対応）: {fb_diff.get('persisted', [])}\n"
                     up += f"- 新規指摘: {fb_diff.get('new', [])}\n"
                     up += f"- 解消率: {fb_diff.get('resolution_rate', 0):.0%}\n\n"
-            up += "素材を改善してください。\n対応可否レポートを ```yaml ``` ブロックで出力してください。\n"
-            uo = call_agent_with_retry("material_updater", up)
+            up += ("素材を改善してください。\n"
+                   "改善後のdev_simulation_log.md全文を出力した後、\n"
+                   "対応可否レポートを ```yaml ``` ブロックで出力してください。\n")
+            uo = call_agent_with_retry("material_updater", up, state=state)
             registry.increment_invocations("material_updater")
+            # 出力を素材ファイルに保存（--add-dir廃止対応）
+            sim_log = MATERIALS_DIR / "dev_simulation_log.md"
+            if uo and len(uo) > 500:
+                # YAML部分を除いた本文をsim_logに保存
+                yaml_start = uo.find("```yaml")
+                main_text = uo[:yaml_start].strip() if yaml_start > 0 else uo
+                if main_text:
+                    sim_log.write_text(main_text, encoding="utf-8")
             try:
                 rr = parse_updater_response(uo)
                 result["cannot_resolve_actions"] = [r for r in rr if isinstance(r, dict) and r.get("action") == "cannot_resolve"]
@@ -1175,11 +1384,20 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
 
         if registry.exists("writer"):
             wp = build_agent_prompt("writer", registry.get("writer"), state)
-            # 前イテレーションのFBをWriterに注入
-            if iteration > 1:
+
+            if iteration == 1:
+                # 初回: 新規生成
+                wp += f"\n\n## 出力先\n{iter_dir / 'article.md'}\n\n記事を新規に執筆してください。\n"
+            else:
+                # 2回目以降: 前回記事をベースに修正
+                prev_article = ITERATIONS_DIR / str(iteration - 1) / "article.md"
+                if prev_article.exists():
+                    wp += f"\n\n## 修正対象の前回記事\n\n{prev_article.read_text(encoding='utf-8')}\n\n"
+
                 prev_review = ITERATIONS_DIR / str(iteration - 1) / "review.md"
                 if prev_review.exists():
                     wp += f"\n\n## 前回のレビュー指摘（必ず全て対応すること）\n\n{prev_review.read_text(encoding='utf-8')[:5000]}\n\n"
+
                 # FB差分サマリーを注入
                 fb_log_p = state.fb_log.get(pn, {})
                 if fb_log_p:
@@ -1190,12 +1408,21 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
                         wp += f"- 未解消の指摘（今回必ず対応）: {fb_diff.get('persisted', [])}\n"
                         wp += f"- 新規指摘: {fb_diff.get('new', [])}\n"
                         wp += f"- 解消率: {fb_diff.get('resolution_rate', 0):.0%}\n\n"
+
                 # punched draftがあればそれも渡す
                 prev_punched = ITERATIONS_DIR / str(iteration - 1) / "draft_punched.md"
                 if prev_punched.exists():
                     wp += f"\n\n## 前イテレーションの強化済みドラフト（参考）\n{prev_punched.read_text(encoding='utf-8')[:6000]}\n\n"
-            wp += f"\n\n## 出力先\n{iter_dir / 'article.md'}\n\n記事を執筆してください。\n"
-            wo = call_agent_with_retry("writer", wp)
+
+                # 動的エージェントのアドバイスがあれば渡す
+                prev_iter_dir = ITERATIONS_DIR / str(iteration - 1)
+                for advice_file in prev_iter_dir.glob("dynamic_advice_*.md"):
+                    wp += f"\n\n## 専門エージェントからのアドバイス（{advice_file.stem}）\n{advice_file.read_text(encoding='utf-8')[:3000]}\n\n"
+
+                wp += (f"\n\n## 出力先\n{iter_dir / 'article.md'}\n\n"
+                       "【重要】上記の「修正対象の前回記事」をベースに、レビュー指摘された箇所を中心に修正してください。\n"
+                       "指摘されていない箇所はそのまま維持してください。全文を最初から書き直さないでください。\n")
+            wo = call_agent_with_retry("writer", wp, state=state)
             registry.increment_invocations("writer")
             ap = iter_dir / "article.md"
             if not ap.exists():
@@ -1215,7 +1442,7 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
                 arp += metrics_ctx
             arp += f"\nレビューを {iter_dir / 'review.md'} に出力してください。\n"
             arp += "\n```json ``` ブロックでFB構造化データを含めてください。\n"
-            aro = call_agent_with_retry("article_reviewer", arp)
+            aro = call_agent_with_retry("article_reviewer", arp, state=state)
             registry.increment_invocations("article_reviewer")
             rvp = iter_dir / "review.md"
             if not rvp.exists():
@@ -1255,7 +1482,7 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
                 if sp2.exists():
                     npp += f"## fixed/struggles.md\n\n{sp2.read_text(encoding='utf-8')[:2000]}\n\n"
                 npp += f"\n\n## 出力先\n- {iter_dir / 'draft_punched.md'}\n- {iter_dir / 'punch_report.md'}\n\n書き直してください。\n"
-                npo = call_agent_with_retry("narrative_puncher", npp)
+                npo = call_agent_with_retry("narrative_puncher", npp, state=state)
                 registry.increment_invocations("narrative_puncher")
                 pp = iter_dir / "draft_punched.md"
                 if not pp.exists():
@@ -1273,14 +1500,39 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
             sgup += "\n\n## 記事\n"
             if ap2.exists():
                 sgup += ap2.read_text(encoding="utf-8")[:3000]
-            sgup += "\n\nstyle_guide.mdにルールを抽出・追記してください。\n"
+            sgup += ("\n\nstyle_guide.mdにルールを抽出・追記してください。\n"
+                     "【重要】出力には更新後のstyle_guide.md全文を含めてください。"
+                     "「# Style Guide」ヘッダーから始めてください。\n")
             if check_important_rule_limit():
                 sgup += f"\n\n{build_retirement_context(state)}\n"
-            call_agent_with_retry("style_guide_updater", sgup)
+            sgu_output = call_agent_with_retry("style_guide_updater", sgup, state=state)
             registry.increment_invocations("style_guide_updater")
+            _save_agent_output("style_guide_updater", sgu_output)
             if should_run_consolidator():
                 log("Running Consolidator...")
-                call_agent_with_retry("consolidator", build_consolidator_prompt())
+                cons_output = call_agent_with_retry("consolidator", build_consolidator_prompt(), state=state)
+                _save_agent_output("consolidator", cons_output)
+
+        # === 動的エージェント実行（ADD_AGENTで生成されたエージェント） ===
+        dynamic_agents = registry.list_by_phase("dynamic")
+        if dynamic_agents:
+            for da_name in dynamic_agents:
+                log(f"Dynamic agent: {da_name}")
+                da_def = registry.get(da_name)
+                da_prompt = build_agent_prompt(da_name, da_def, state)
+                # 記事とレビューを渡す
+                if ap.exists():
+                    da_prompt += f"\n\n## 現在の記事\n\n{ap.read_text(encoding='utf-8')[:8000]}\n\n"
+                rvp_da = iter_dir / "review.md"
+                if rvp_da.exists():
+                    da_prompt += f"\n\n## 直近のレビュー\n\n{rvp_da.read_text(encoding='utf-8')[:3000]}\n\n"
+                da_prompt += "\n\n## 出力\n記事を改善するためのアドバイスを出力してください。\n"
+                da_output = call_agent_with_retry(da_name, da_prompt, state=state)
+                registry.increment_invocations(da_name)
+                # アドバイスとして保存（記事は上書きしない）
+                advice_path = iter_dir / f"dynamic_advice_{da_name}.md"
+                advice_path.write_text(da_output, encoding="utf-8")
+                log(f"Dynamic agent {da_name} advice saved ({len(da_output)} chars)")
 
     return result
 
@@ -1392,7 +1644,7 @@ def handle_cannot_resolve(actions: list, phase: dict, registry: AgentRegistry, s
         elif reason == "eval_mismatch":
             fm = filter_agent_memory(state.article_type, limit=5)
             call_agent_with_retry("eval_designer", build_eval_adjustment_prompt(
-                PROJECT_ROOT / "eval_criteria.md", state.get_scores(pn), fm))
+                PROJECT_ROOT / "eval_criteria.md", state.get_scores(pn), fm), state=state)
         elif reason == "strategy_level":
             if not state.is_escalated(pn):
                 state.mark_escalated(pn)
@@ -1429,27 +1681,28 @@ def execute_escalation_action(action: str, phase: dict, registry: AgentRegistry,
     if action == "RESIMULATE":
         if registry.exists("dev_simulator"):
             p = build_agent_prompt("dev_simulator", registry.get("dev_simulator"), state)
-            call_agent_with_retry("dev_simulator", p)
+            call_agent_with_retry("dev_simulator", p, state=state)
             registry.increment_invocations("dev_simulator")
     elif action == "RESEARCH":
         if registry.exists("trend_searcher"):
             p = build_agent_prompt("trend_searcher", registry.get("trend_searcher"), state)
-            call_agent_with_retry("trend_searcher", p)
+            call_agent_with_retry("trend_searcher", p, state=state)
             registry.increment_invocations("trend_searcher")
     elif action == "ADJUST_EVAL":
         fm = filter_agent_memory(state.article_type, limit=5)
         call_agent_with_retry("eval_designer", build_eval_adjustment_prompt(
-            PROJECT_ROOT / "eval_criteria.md", state.get_scores(pn), fm))
+            PROJECT_ROOT / "eval_criteria.md", state.get_scores(pn), fm), state=state)
     elif action == "MATERIAL_FALLBACK":
         mp = find_phase_by_name(load_workflow(), "material_review")
         if mp:
             execute_pdca_loop(mp, registry, state)
     elif action == "ADD_AGENT":
         sa = identify_stagnant_axes(state, pn)
-        call_agent_with_retry("agent_editor", build_add_agent_prompt(PROJECT_ROOT / "strategy.md", sa))
+        call_agent_with_retry("agent_editor", build_add_agent_prompt(PROJECT_ROOT / "strategy.md", sa), state=state)
         discover_new_agents(registry)
     elif action == "CONSOLIDATE":
-        call_agent_with_retry("consolidator", build_consolidator_prompt())
+        cons_out = call_agent_with_retry("consolidator", build_consolidator_prompt(), state=state)
+        _save_agent_output("consolidator", cons_out)
     elif action == "ABORT":
         state.log.append(f"[{pn}] ABORT")
     else:
@@ -1510,7 +1763,8 @@ def validate_and_fix_agents(state: RunState):
             raise AgentValidationError(f"Validation failed after {MAX_AGENT_EDITOR_RETRIES + 1} attempts:\n" + "\n".join(errors))
         call_agent_with_retry("agent_editor",
                               f"以下の検証エラーを修正してください。\n\n## エラー\n" + "\n".join(errors) +
-                              "\n\nagents/generated/ のファイルとworkflow.jsonを修正してください。\n")
+                              "\n\nagents/generated/ のファイルとworkflow.jsonを修正してください。\n",
+                              state=state)
 
 
 # ============================================================
@@ -1648,6 +1902,10 @@ def cmd_run(source_dir: str, user_instruction: str, model: str = "sonnet") -> st
         if final:
             log(f"Final article: {final}")
         log(f"Scores: {state.scores}")
+        tu = state.token_usage
+        log(f"Tokens: {tu['total_input_tokens']} in / {tu['total_output_tokens']} out / ${tu['total_cost_usd']:.4f}")
+        agent_costs = {k: f"${v['cost']:.4f} ({v['calls']} calls)" for k, v in tu['by_agent'].items()}
+        log(f"Agent costs: {agent_costs}")
         log("=" * 60)
         return run_id
 
