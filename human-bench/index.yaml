@@ -1,0 +1,382 @@
+# human-bench/index.yaml
+# ペルソナ記事ベンチマーク — メタデータインデックス
+# 18本（体験記10, 比較検証2, チュートリアル4, 思想記2）
+
+articles:
+  # ========== 体験記 ==========
+
+  - id: "recursive_five_principles"
+    title: "CLAUDE.mdのルールを忘れる問題→再帰的5原則の発見"
+    file: "体験記/0420ecec9526dc.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "語尾ルールの観察から再帰的5原則を帰納する論理展開"
+        - "具体的な成功/失敗パターンの比較"
+      style:
+        - "口語体で親しみやすい語り口"
+        - "問題→仮説→検証→発見の流れが明快"
+    tech_depth: "中級"
+    tone: "カジュアル"
+    char_count: 8121
+    tags:
+      - "Claude Code"
+      - "CLAUDE.md"
+      - "プロンプト設計"
+
+  - id: "karou_seppuku"
+    title: "テストって言っただけなのに、AIが自分でバグ見つけて切腹ルールを追加してきた"
+    file: "体験記/5fee11d03a11a1.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "戦国モチーフの階層構造が独創的"
+        - "Skills自動生成の具体的動作記録"
+      style:
+        - "冒頭の結論提示でインパクト大"
+        - "Netflix見てる感覚など独自のメタファー"
+    tech_depth: "中級"
+    tone: "カジュアル"
+    char_count: 24941
+    tags:
+      - "Claude Code"
+      - "マルチエージェント"
+      - "テスト自動化"
+
+  - id: "design_md_harness"
+    title: "DESIGN.md + 壊れたら気づくハーネス — AI向けデザインシステムを維持できる仕組みにした記録"
+    file: "体験記/7f0d3693f70e2f.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "1ファイル限界→3層分離の進化過程が明確"
+        - "A/Bベンチマーク数値による定量評価"
+      style:
+        - "冒頭で結論提示し読者を引き込む構成"
+        - "ドリフト問題の具体例で共感を誘う"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 12594
+    tags:
+      - "デザインシステム"
+      - "Claude Code"
+      - "ハーネス"
+
+  - id: "karou_seppuku_v110"
+    title: "【続】Claude Codeマルチエージェント：v1.1.0で家老が切腹しかけた話"
+    file: "体験記/8870bbf7c14c22.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "F001違反→コンパクション問題の発見→仕組み化の流れ"
+        - "5人ペルソナ召喚、thinking無効化など具体的な改善事例"
+      style:
+        - "戦国口調の一貫性"
+        - "神回6連発という密度の高い構成"
+    tech_depth: "中級"
+    tone: "カジュアル"
+    char_count: 5874
+    tags:
+      - "Claude Code"
+      - "マルチエージェント"
+      - "デバッグ"
+
+  - id: "evolutionary_memory"
+    title: "Claude Codeのメモリを3階層にしたら「覚えてる」が「学んでる」に変わった"
+    file: "体験記/claude-code-evolutionary-memory.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "学習4段階モデルの引用と実装の接続"
+        - "pain_count=3で昇格する具体的な仕組み"
+      style:
+        - "タイトルのフックが強い（覚えてる→学んでる）"
+        - "概念と実装の行き来がスムーズ"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 1714
+    tags:
+      - "Claude Code"
+      - "メモリ"
+      - "自己改善"
+
+  - id: "design_system_skills"
+    title: "デザインシステムを丸ごとSkillsにする"
+    file: "体験記/design-system-skills.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "MCP→Skills移行の論理的な流れ"
+        - "段階的開示の概念とリポジトリ構造の具体例"
+      style:
+        - "構成が整理されていて読みやすい"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 6433
+    tags:
+      - "デザインシステム"
+      - "Skills"
+      - "Claude Code"
+
+  - id: "ai_review_83_percent"
+    title: "全PRの83%をAIレビューだけでマージできるようにした"
+    file: "体験記/e051583461c181.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "83%という数値のインパクトと根拠"
+        - "3専門家並列レビュー、毎晩5エージェント自動改善ループの具体設計"
+      style:
+        - "メメント比喩の効果的な使用"
+        - "データと仕組みの具体性が突出"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 7070
+    tags:
+      - "AIレビュー"
+      - "CI/CD"
+      - "マルチエージェント"
+
+  - id: "disposable_spec"
+    title: '仕様書は"使い捨て"にした方がうまくいった——仕様駆動開発3ヶ月の転換'
+    file: "体験記/ef573ae39b9162.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "3ヶ月17施策の実運用データに基づく振り返り"
+        - "仕様維持の限界→方針転換の正直な失敗談"
+      style:
+        - "「使い捨て」という逆説的フックが効果的"
+        - "実データに基づく説得力"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 3849
+    tags:
+      - "仕様駆動開発"
+      - "AI開発"
+      - "プロセス改善"
+
+  - id: "takt_oss"
+    title: "AIの見張り番をやめよう — AIチームを指揮するOSS「TAKT」を公開しました"
+    file: "体験記/c6842288a526d7.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "見張り番→強制力への発想転換が明確"
+        - "サブエージェント/Skill/ワークフローの試行錯誤過程"
+      style:
+        - "冒頭の共感フック（さっき言ったこと忘れてるの？）"
+        - "課題→試行錯誤→解決のストーリーが自然"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 46494
+    tags:
+      - "AIエージェント"
+      - "オーケストレーション"
+      - "OSS"
+
+  - id: "shinkoku_oss"
+    title: "確定申告を自動化する Agent Skill「shinkoku」を OSS にした"
+    file: "体験記/83fe82191db01b.md"
+    type: "体験記"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "動機→実装→テスト→検証の流れが網羅的"
+        - "freeeとの比較検証でエビデンスを補強"
+      style:
+        - "冒頭「めんどくさくないですか？」のフックが効く"
+        - "エピローグの個人的ぼやきが記事に深みを与える"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 18983
+    tags:
+      - "確定申告"
+      - "Agent Skill"
+      - "OSS"
+
+  # ========== 比較検証 ==========
+
+  - id: "dspy_vs_expert"
+    title: "DSPyでドメインエキスパートに挑んだ結果、返り討ちにあった話"
+    file: "比較検証/8a3628b07f8fd1.md"
+    type: "比較検証"
+    material_quality: "high"
+    style_quality: "high"
+    strengths:
+      material:
+        - "3アプローチの精度比較（76%→82%→85%）が明確"
+        - "失敗理由の構造的分析"
+      style:
+        - "「返り討ち」というフックと失敗談の正直さ"
+        - "データに基づく説得力"
+    tech_depth: "上級"
+    tone: "カジュアル寄り"
+    char_count: 5726
+    tags:
+      - "DSPy"
+      - "プロンプト最適化"
+      - "比較検証"
+
+  - id: "mcp_to_skill"
+    title: "Claude CodeとCodexの連携をMCPからSkillに変えたら体験が劇的に改善した"
+    file: "比較検証/63d325934ba0de.md"
+    type: "比較検証"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "MCP vs Skillの比較テーブルが明確"
+        - "問題点と改善点が1対1で対応"
+      style:
+        - "構成が整理されていて分かりやすい"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 8222
+    tags:
+      - "Claude Code"
+      - "Codex"
+      - "MCP"
+      - "Skills"
+
+  # ========== チュートリアル ==========
+
+  - id: "dspy_intro"
+    title: "プロンプトエンジニアリングを終わらせるDSPy"
+    file: "チュートリアル/39fb763aca746c.md"
+    type: "チュートリアル"
+    material_quality: "medium"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "Chainerとの比較で概念を分かりやすく説明"
+      style:
+        - "短くまとまっている"
+    tech_depth: "中級"
+    tone: "カジュアル寄り"
+    char_count: 3206
+    tags:
+      - "DSPy"
+      - "プロンプト"
+      - "LLM"
+
+  - id: "pm_claude_code"
+    title: "PMが本来やるべき仕事の時間を取り戻す — Claude Codeで変わった3つのPM業務"
+    file: "チュートリアル/4a61491a6b5059.md"
+    type: "チュートリアル"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "3業務のBefore/After表が具体的"
+        - "Skills/SubAgents/MCP連携の実践例が豊富"
+      style:
+        - "構成が整っていて読みやすい"
+    tech_depth: "中級"
+    tone: "フォーマル寄り"
+    char_count: 6867
+    tags:
+      - "PM"
+      - "Claude Code"
+      - "業務効率化"
+
+  - id: "langfuse_ai_dev"
+    title: "「なんとなく改善」からの脱却。Langfuseで作る、精度を改善し続けられるAI開発基盤"
+    file: "チュートリアル/cd04dd1350bac5.md"
+    type: "チュートリアル"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "Prompts/Tracing/Datasetsの3機能紹介が具体的"
+        - "Claude Code Skills連携の改善サイクル"
+      style:
+        - "堅実で信頼感のある文体"
+    tech_depth: "中級"
+    tone: "フォーマル寄り"
+    char_count: 2606
+    tags:
+      - "Langfuse"
+      - "LLMOps"
+      - "精度改善"
+
+  - id: "transformer_survey"
+    title: "30分で完全理解するTransformerの世界"
+    file: "チュートリアル/2023-01-shimizu.md"
+    type: "チュートリアル"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "Attention機構からスケーリング則まで体系的に網羅"
+        - "サーベイ論文ベースで情報の信頼性が高い"
+      style:
+        - "図表と数式を交えた丁寧な解説"
+    tech_depth: "上級"
+    tone: "フォーマル寄り"
+    char_count: 93128
+    tags:
+      - "Transformer"
+      - "深層学習"
+      - "NLP"
+
+  # ========== 思想記 ==========
+
+  - id: "agent_loop_feedback"
+    title: "エンジニアのAgent Loopを整える技術 ─フィードバックループ is All You Need─"
+    file: "思想記/180c570d69328e.md"
+    type: "思想記"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "制御理論とAgent Loopの対応表が秀逸"
+        - "階層構造の整理が緻密"
+      style:
+        - "論理的で説得力のある展開"
+    tech_depth: "中級"
+    tone: "フォーマル寄り"
+    char_count: 4134
+    tags:
+      - "Agent Loop"
+      - "フィードバックループ"
+      - "設計思想"
+
+  - id: "spec_context_harness"
+    title: "AIがコードを書くほど、要件定義は上に移動する――Spec・Context・Harness三層設計"
+    file: "思想記/30f79910d111bb.md"
+    type: "思想記"
+    material_quality: "high"
+    style_quality: "medium"
+    strengths:
+      material:
+        - "SDD三段階分類とツール比較表の情報密度"
+        - "MDD教訓からの実践的示唆"
+      style:
+        - "論文的な構成で読み応えがある"
+    tech_depth: "上級"
+    tone: "フォーマル寄り"
+    char_count: 19876
+    tags:
+      - "要件定義"
+      - "仕様駆動開発"
+      - "AI開発"

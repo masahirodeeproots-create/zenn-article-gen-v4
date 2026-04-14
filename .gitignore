@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+runs/
+iterations/
+material_reviews/
+materials/
+agents/generated/
+strategy.md
+eval_criteria.md
+fb_log.json
+source-material-run1/
