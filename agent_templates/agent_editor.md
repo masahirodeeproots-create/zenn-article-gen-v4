@@ -58,7 +58,6 @@ customizable_sections:
   "phases": [
     {"name": "material_generation", "agents": ["code_analyzer", "trend_searcher", "dev_simulator"], "loop": false, "parallel": true},
     {"name": "material_review", "agents": ["material_reviewer", "material_updater"], "loop": true, "max_iterations": 5, "score_threshold": 8.0, "stagnation_window": 3, "stagnation_tolerance": 0.5},
-    {"name": "article_writing", "agents": ["writer"], "loop": false},
     {"name": "article_review", "agents": ["writer", "article_reviewer", "style_guide_updater"], "loop": true, "max_iterations": 10, "score_threshold": 9.0, "stagnation_window": 3, "stagnation_tolerance": 0.5, "allow_material_fallback": true}
   ]
 }
@@ -69,6 +68,7 @@ customizable_sections:
 - `loop: true`のフェーズには`max_iterations`が必須
 - `article_review`フェーズには必ず`style_guide_updater`を含めること
 - 全`agents`の名前が`agents/generated/`に対応するファイルを持つこと
+- **`article_writing`フェーズは作らないこと**。Writer初稿は`article_review`の最初のイテレーションで生成される
 
 ### 動的生成のフロー
 

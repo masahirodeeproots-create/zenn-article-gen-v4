@@ -812,10 +812,11 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
     if agent_name == "code_analyzer":
         src = Path(state.source_dir) if Path(state.source_dir).is_absolute() else PROJECT_ROOT / state.source_dir
         if src.is_dir():
-            for f in sorted(src.iterdir()):
+            for f in sorted(src.rglob("*")):
                 if f.is_file() and f.suffix in (".md", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".txt"):
-                    prompt += f"## ソースファイル: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
-        prompt += f"## 出力\n以下の5ファイルの内容をそれぞれ見出し付きで出力してください:\n- system_overview.md\n- metrics.md\n- architecture.md\n- code_examples.md\n- comparisons.md\n\n"
+                    rel = f.relative_to(src)
+                    prompt += f"## ソースファイル: {rel}\n\n{f.read_text(encoding='utf-8')}\n\n"
+        prompt += f"## 出力\n以下の5ファイルの内容を、それぞれ独立した見出しセクション（## architecture / ## key_decisions / ## interesting_patterns / ## struggles / ## code_snippets）で出力してください。各セクション最低1500文字以上。\n- architecture.md — 全体構成・設計思想\n- key_decisions.md — 技術選定理由・トレードオフ\n- interesting_patterns.md — 特徴的な実装パターン\n- struggles.md — 苦労した箇所・失敗・リファクタ履歴\n- code_snippets.md — コードスニペット集\n\n"
 
     # trend_searcher: knowledge/とstrategy.mdを埋め込む
     if agent_name == "trend_searcher":
@@ -833,16 +834,17 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
     if agent_name == "dev_simulator":
         src = Path(state.source_dir) if Path(state.source_dir).is_absolute() else PROJECT_ROOT / state.source_dir
         if src.is_dir():
-            for f in sorted(src.iterdir()):
+            for f in sorted(src.rglob("*")):
                 if f.is_file() and f.suffix in (".md", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".txt"):
-                    prompt += f"## ソースファイル: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
+                    rel = f.relative_to(src)
+                    prompt += f"## ソースファイル: {rel}\n\n{f.read_text(encoding='utf-8')}\n\n"
         for fn in ["trend_context.md", "reader_pain.md"]:
             fp = MATERIALS_DIR / fn
             if fp.exists():
                 prompt += f"## 素材: {fn}\n\n{fp.read_text(encoding='utf-8')}\n\n"
-        fixed = MATERIALS_DIR / "fixed" / "system_overview.md"
+        fixed = MATERIALS_DIR / "fixed" / "architecture.md"
         if fixed.exists():
-            prompt += f"## 素材: system_overview.md\n\n{fixed.read_text(encoding='utf-8')}\n\n"
+            prompt += f"## 素材: architecture.md\n\n{fixed.read_text(encoding='utf-8')}\n\n"
         prompt += "## 出力\n開発シミュレーションの対話ログを出力してください。\n\n"
 
     # material_updater: レビュー結果+素材を埋め込む（素材ファイルの上書きが必要）
@@ -913,9 +915,10 @@ def call_strategist_plan(source_dir: str, user_instruction: str, state: RunState
     source_path = Path(source_dir) if Path(source_dir).is_absolute() else PROJECT_ROOT / source_dir
     source_text = ""
     if source_path.is_dir():
-        for f in sorted(source_path.iterdir()):
+        for f in sorted(source_path.rglob("*")):
             if f.is_file() and f.suffix in (".md", ".py", ".ts", ".js", ".json", ".yaml", ".yml", ".txt"):
-                source_text += f"\n### {f.name}\n\n{f.read_text(encoding='utf-8')}\n"
+                rel = f.relative_to(source_path)
+                source_text += f"\n### {rel}\n\n{f.read_text(encoding='utf-8')}\n"
     elif source_path.is_file():
         source_text = source_path.read_text(encoding="utf-8")
 
@@ -971,7 +974,6 @@ def call_agent_editor(filtered_memory: list, state: RunState):
             {"name": "material_review", "agents": ["material_reviewer", "material_updater"],
              "loop": True, "max_iterations": 5, "score_threshold": 8.0,
              "stagnation_window": 3, "stagnation_tolerance": 0.5},
-            {"name": "article_writing", "agents": ["writer"], "loop": False},
             {"name": "article_review", "agents": ["writer", "article_reviewer", "narrative_puncher", "style_guide_updater"],
              "loop": True, "max_iterations": 10, "score_threshold": 9.0,
              "stagnation_window": 3, "stagnation_tolerance": 0.5, "allow_material_fallback": True},
@@ -1147,24 +1149,27 @@ def _save_agent_output(agent_name: str, output: str):
     if agent_name == "code_analyzer":
         fixed_dir = MATERIALS_DIR / "fixed"
         fixed_dir.mkdir(parents=True, exist_ok=True)
-        # セクション見出しで分割を試みる（英語+日本語対応）
+        # セクション見出しで分割を試みる（テンプレート通りの5ファイル、英語+日本語対応）
+        # 長いキーを先に走査（誤マッチ防止）
         file_map = {
-            "system_overview": "system_overview.md",
-            "system overview": "system_overview.md",
-            "システム概要": "system_overview.md",
-            "概要": "system_overview.md",
-            "metrics": "metrics.md",
-            "メトリクス": "metrics.md",
-            "数値": "metrics.md",
             "architecture": "architecture.md",
             "アーキテクチャ": "architecture.md",
-            "設計": "architecture.md",
-            "code_examples": "code_examples.md",
-            "code examples": "code_examples.md",
-            "コード例": "code_examples.md",
-            "コード": "code_examples.md",
-            "comparisons": "comparisons.md",
-            "比較": "comparisons.md",
+            "key_decisions": "key_decisions.md",
+            "key decisions": "key_decisions.md",
+            "技術選定": "key_decisions.md",
+            "設計判断": "key_decisions.md",
+            "interesting_patterns": "interesting_patterns.md",
+            "interesting patterns": "interesting_patterns.md",
+            "実装パターン": "interesting_patterns.md",
+            "特徴的な実装": "interesting_patterns.md",
+            "struggles": "struggles.md",
+            "苦労": "struggles.md",
+            "失敗": "struggles.md",
+            "試行錯誤": "struggles.md",
+            "code_snippets": "code_snippets.md",
+            "code snippets": "code_snippets.md",
+            "コードスニペット": "code_snippets.md",
+            "スニペット": "code_snippets.md",
         }
         # ##見出しで分割
         sections = re.split(r'^#{1,3}\s+', output, flags=re.MULTILINE)
@@ -1178,11 +1183,11 @@ def _save_agent_output(agent_name: str, output: str):
                     (fixed_dir / fname).write_text(content.strip(), encoding="utf-8")
                     saved_any = True
                     break
-        # フォールバック: 分割できなければ全文をsystem_overview.mdに
+        # フォールバック: 分割できなければ全文をarchitecture.mdに
         if not saved_any:
-            (fixed_dir / "system_overview.md").write_text(output, encoding="utf-8")
-        # 空ファイルがあれば最低限のプレースホルダーを入れる
-        for fname in file_map.values():
+            (fixed_dir / "architecture.md").write_text(output, encoding="utf-8")
+        # 空ファイルがあれば最低限のプレースホルダーを入れる（set()で重複排除）
+        for fname in set(file_map.values()):
             fp = fixed_dir / fname
             if not fp.exists() or fp.stat().st_size == 0:
                 fp.write_text(f"（{fname}: code_analyzerの出力から抽出できませんでした）", encoding="utf-8")
@@ -1396,18 +1401,24 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
                     up += f"- 新規指摘: {fb_diff.get('new', [])}\n"
                     up += f"- 解消率: {fb_diff.get('resolution_rate', 0):.0%}\n\n"
             up += ("素材を改善してください。\n"
-                   "改善後のdev_simulation_log.md全文を出力した後、\n"
-                   "対応可否レポートを ```yaml ``` ブロックで出力してください。\n")
+                   "【必須】改善後のdev_simulation_log.md **全文** を出力した後、\n"
+                   "対応可否レポートを ```yaml ``` ブロックで出力してください。\n"
+                   "【重要】全文は最低5000文字以上。差分サマリや「〜を変更しました」という報告のみの出力は無効となります。\n")
             uo = call_agent_with_retry("material_updater", up, state=state)
             registry.increment_invocations("material_updater")
-            # 出力を素材ファイルに保存（--add-dir廃止対応）
+            # 出力を素材ファイルに保存（サイズチェックで破壊防止）
             sim_log = MATERIALS_DIR / "dev_simulation_log.md"
             if uo and len(uo) > 500:
-                # YAML部分を除いた本文をsim_logに保存
                 yaml_start = uo.find("```yaml")
                 main_text = uo[:yaml_start].strip() if yaml_start > 0 else uo
+                # 既存ファイルの50%以上のサイズがある場合のみ上書き（差分レポートで破壊されるのを防止）
                 if main_text:
-                    sim_log.write_text(main_text, encoding="utf-8")
+                    existing_size = sim_log.stat().st_size if sim_log.exists() else 0
+                    new_size = len(main_text.encode("utf-8"))
+                    if existing_size == 0 or new_size >= existing_size * 0.5:
+                        sim_log.write_text(main_text, encoding="utf-8")
+                    else:
+                        log(f"WARNING: material_updater output too small ({new_size}B < {existing_size*0.5:.0f}B). Skipping overwrite.")
             try:
                 rr = parse_updater_response(uo)
                 result["cannot_resolve_actions"] = [r for r in rr if isinstance(r, dict) and r.get("action") == "cannot_resolve"]
