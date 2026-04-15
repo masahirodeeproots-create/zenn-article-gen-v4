@@ -800,12 +800,13 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
         strat = PROJECT_ROOT / "strategy.md"
         if strat.exists():
             prompt += f"## 戦略\n\n{strat.read_text(encoding='utf-8')}\n\n"
-        for f in (MATERIALS_DIR / "fixed").glob("*.md"):
-            prompt += f"## 素材: {f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
-        for fn in ["trend_context.md", "reader_pain.md", "dev_simulation_log.md"]:
-            fp = MATERIALS_DIR / fn
-            if fp.exists():
-                prompt += f"## 素材: {fn}\n\n{fp.read_text(encoding='utf-8')}\n\n"
+        # fixed/配下の素材
+        for f in sorted((MATERIALS_DIR / "fixed").glob("*.md")):
+            prompt += f"## 素材: fixed/{f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
+        # materials/直下の全.mdファイル（fixed/配下は上で処理済み、globは直下のみ）
+        for f in sorted(MATERIALS_DIR.glob("*.md")):
+            content = f.read_text(encoding="utf-8")
+            prompt += f"## 素材: {f.name}\n\n{content}\n\n"
 
     # code_analyzer: ソースファイルを埋め込む
     if agent_name == "code_analyzer":
@@ -1146,13 +1147,24 @@ def _save_agent_output(agent_name: str, output: str):
     if agent_name == "code_analyzer":
         fixed_dir = MATERIALS_DIR / "fixed"
         fixed_dir.mkdir(parents=True, exist_ok=True)
-        # セクション見出しで分割を試みる
+        # セクション見出しで分割を試みる（英語+日本語対応）
         file_map = {
             "system_overview": "system_overview.md",
+            "system overview": "system_overview.md",
+            "システム概要": "system_overview.md",
+            "概要": "system_overview.md",
             "metrics": "metrics.md",
+            "メトリクス": "metrics.md",
+            "数値": "metrics.md",
             "architecture": "architecture.md",
+            "アーキテクチャ": "architecture.md",
+            "設計": "architecture.md",
             "code_examples": "code_examples.md",
+            "code examples": "code_examples.md",
+            "コード例": "code_examples.md",
+            "コード": "code_examples.md",
             "comparisons": "comparisons.md",
+            "比較": "comparisons.md",
         }
         # ##見出しで分割
         sections = re.split(r'^#{1,3}\s+', output, flags=re.MULTILINE)
@@ -1176,11 +1188,26 @@ def _save_agent_output(agent_name: str, output: str):
                 fp.write_text(f"（{fname}: code_analyzerの出力から抽出できませんでした）", encoding="utf-8")
 
     elif agent_name == "trend_searcher":
-        # trend_context.md と reader_pain.md に保存
+        # 「読者ペイン」セクションで分割を試みる
+        pain_patterns = [
+            r'^#{1,3}\s+.*読者ペイン',
+            r'^#{1,3}\s+.*読者が求めている',
+            r'^#{1,3}\s+.*Reader Pain',
+        ]
+        trend_part = output
+        pain_part = ""
+        for pat in pain_patterns:
+            m = re.search(pat, output, re.MULTILINE | re.IGNORECASE)
+            if m:
+                trend_part = output[:m.start()].rstrip()
+                pain_part = output[m.start():].strip()
+                break
         if not (MATERIALS_DIR / "trend_context.md").exists():
-            (MATERIALS_DIR / "trend_context.md").write_text(output, encoding="utf-8")
+            (MATERIALS_DIR / "trend_context.md").write_text(
+                trend_part if trend_part.strip() else output, encoding="utf-8")
         if not (MATERIALS_DIR / "reader_pain.md").exists():
-            (MATERIALS_DIR / "reader_pain.md").write_text(output[:2000], encoding="utf-8")
+            (MATERIALS_DIR / "reader_pain.md").write_text(
+                pain_part if pain_part.strip() else output[:2000], encoding="utf-8")
 
     elif agent_name == "dev_simulator":
         if not (MATERIALS_DIR / "dev_simulation_log.md").exists():
@@ -1188,15 +1215,24 @@ def _save_agent_output(agent_name: str, output: str):
 
     elif agent_name == "style_guide_updater":
         sg = STYLE_MEMORY_DIR / "style_guide.md"
-        # style_guide.md全文が含まれている場合のみ上書き（報告テキストでの上書きを防止）
         lines = output.strip().split("\n")
-        if len(lines) >= 10 and ("# Style Guide" in output or "## IMPORTANT" in output or "## Learned" in output):
-            sg.write_text(output, encoding="utf-8")
+        if len(lines) >= 10:
+            # 「# Style Guide」で始まる行を探し、そこ以降だけを保存（報告テキスト除去）
+            sg_match = re.search(r'^# Style Guide\s*$', output, re.MULTILINE)
+            if sg_match:
+                clean_output = output[sg_match.start():].strip()
+                if len(clean_output.split("\n")) >= 10:
+                    sg.write_text(clean_output, encoding="utf-8")
 
     elif agent_name == "consolidator":
         sg = STYLE_MEMORY_DIR / "style_guide.md"
         if output.strip() and len(output) > 50:
             sg.write_text(output, encoding="utf-8")
+
+    elif agent_name == "writer_handoff_generator":
+        hp = MATERIALS_DIR / "writer_handoff.md"
+        if output.strip():
+            hp.write_text(output, encoding="utf-8")
 
 
 def verify_agent_outputs(agent_name: str, agent_def: dict):
