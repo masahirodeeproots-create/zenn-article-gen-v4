@@ -1215,8 +1215,34 @@ def _save_agent_output(agent_name: str, output: str):
                 pain_part if pain_part.strip() else output[:2000], encoding="utf-8")
 
     elif agent_name == "dev_simulator":
-        if not (MATERIALS_DIR / "dev_simulation_log.md").exists():
-            (MATERIALS_DIR / "dev_simulation_log.md").write_text(output, encoding="utf-8")
+        # テンプレート指定: sim_log.md + sim_highlights.md + sim_metadata.json の3ファイル
+        sim_file_map = {
+            "sim_log": "sim_log.md",
+            "sim log": "sim_log.md",
+            "会話ログ": "sim_log.md",
+            "sim_highlights": "sim_highlights.md",
+            "sim highlights": "sim_highlights.md",
+            "名場面": "sim_highlights.md",
+            "ハイライト": "sim_highlights.md",
+            "sim_metadata": "sim_metadata.json",
+            "sim metadata": "sim_metadata.json",
+            "メタデータ": "sim_metadata.json",
+        }
+        sections = re.split(r'^#{1,3}\s+', output, flags=re.MULTILINE)
+        section_headers = re.findall(r'^(#{1,3}\s+.+)$', output, re.MULTILINE)
+        saved_any = False
+        for i, header in enumerate(section_headers):
+            header_lower = header.lower()
+            for key, fname in sim_file_map.items():
+                if key.replace("_", " ") in header_lower or key in header_lower:
+                    content = sections[i + 1] if i + 1 < len(sections) else ""
+                    (MATERIALS_DIR / fname).write_text(content.strip(), encoding="utf-8")
+                    saved_any = True
+                    break
+        # フォールバック: 分割失敗なら dev_simulation_log.md に全文（既存互換）
+        if not saved_any:
+            if not (MATERIALS_DIR / "dev_simulation_log.md").exists():
+                (MATERIALS_DIR / "dev_simulation_log.md").write_text(output, encoding="utf-8")
 
     elif agent_name == "style_guide_updater":
         sg = STYLE_MEMORY_DIR / "style_guide.md"
@@ -1367,6 +1393,21 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
         # === 素材PDCA ===
         rp = build_agent_prompt("material_reviewer", registry.get("material_reviewer"), state)
         rp += f"\n\n## イテレーション: {iteration}\n素材を評価して {MATERIAL_REVIEWS_DIR / f'review_{iteration}.md'} に出力してください。\n"
+        # 前回FBを注入（iteration > 1 のときのみ）
+        if iteration > 1:
+            prev_issues = []
+            fb_log_p = state.fb_log.get(pn, {})
+            for it in fb_log_p.get("iterations", []):
+                if it.get("iteration") == iteration - 1:
+                    prev_issues = it.get("issues", [])
+                    break
+            if prev_issues:
+                rp += (f"\n\n## 前回（iteration {iteration-1}）のFB — ID再利用の約束\n"
+                       f"以下の指摘が前回記録されました。今回のレビューでは:\n"
+                       f"- 解消された指摘は **同じID** で `resolved: true` を出力してください\n"
+                       f"- 未解消の指摘は **同じID** で `resolved: false` を継続してください\n"
+                       f"- 新規指摘は新しいID（例: MAT-{len(prev_issues)+1:03d}）を使ってください\n\n"
+                       f"```json\n{json.dumps({'issues': prev_issues}, ensure_ascii=False, indent=2)}\n```\n\n")
         rp += "\nレビューには ```json ``` ブロックでFB構造化データを含めてください。\n"
         ro = call_agent_with_retry("material_reviewer", rp, state=state)
         registry.increment_invocations("material_reviewer")
@@ -1487,6 +1528,21 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
             arp += f"\n\n## 評価対象\n{ap}\n\n"
             if metrics_ctx:
                 arp += metrics_ctx
+            # 前回FBを注入（iteration > 1 のときのみ）
+            if iteration > 1:
+                prev_issues = []
+                fb_log_p = state.fb_log.get(pn, {})
+                for it in fb_log_p.get("iterations", []):
+                    if it.get("iteration") == iteration - 1:
+                        prev_issues = it.get("issues", [])
+                        break
+                if prev_issues:
+                    arp += (f"\n\n## 前回（iteration {iteration-1}）のFB — ID再利用の約束\n"
+                            f"以下の指摘が前回記録されました。今回のレビューでは:\n"
+                            f"- 解消された指摘は **同じID** で `resolved: true` を出力してください\n"
+                            f"- 未解消の指摘は **同じID** で `resolved: false` を継続してください\n"
+                            f"- 新規指摘は新しいID（例: ART-{len(prev_issues)+1:03d}）を使ってください\n\n"
+                            f"```json\n{json.dumps({'issues': prev_issues}, ensure_ascii=False, indent=2)}\n```\n\n")
             arp += f"\nレビューを {iter_dir / 'review.md'} に出力してください。\n"
             arp += "\n```json ``` ブロックでFB構造化データを含めてください。\n"
             aro = call_agent_with_retry("article_reviewer", arp, state=state)
@@ -1507,6 +1563,25 @@ def run_iteration(phase: dict, registry: AgentRegistry, state: RunState, iterati
             except ScoreExtractionError:
                 log(f"WARNING: Score extraction failed, using 0.0")
             result["material_issue"] = detect_material_issue(review_text)
+
+            # === HARD FAIL自動判定（メトリクス違反で強制引き下げ）===
+            if iteration in state.metrics_history:
+                metrics = state.metrics_history[iteration]
+                hard_fail_reasons = []
+                if metrics.get("code_ratio", 0) > 0.20:
+                    hard_fail_reasons.append(f"code_ratio={metrics['code_ratio']:.1%}>20%")
+                if metrics.get("desu_masu_ratio", 1) < 0.80:
+                    hard_fail_reasons.append(f"desu_masu={metrics['desu_masu_ratio']:.1%}<80%")
+                if metrics.get("max_consecutive_same_band", 0) > 4:
+                    hard_fail_reasons.append(f"same_band={metrics['max_consecutive_same_band']}>4")
+                if hard_fail_reasons:
+                    original_score = result["overall_score"]
+                    # 違反1件で上限6.0、2件で5.5、3件で5.0
+                    capped_score = min(original_score, 6.0 - 0.5 * (len(hard_fail_reasons) - 1))
+                    if capped_score < original_score:
+                        log(f"HARD FAIL: {hard_fail_reasons}. Score {original_score:.1f} → {capped_score:.1f}")
+                        result["overall_score"] = capped_score
+                        result["hard_fail_reasons"] = hard_fail_reasons
 
         # === Narrative Puncher: フック・失敗談が低い場合にセクションを強化 ===
         if registry.exists("narrative_puncher"):

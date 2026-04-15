@@ -95,6 +95,11 @@ material_reviewerへの差し戻し判断に使用される。
 
 **JSONブロックが含まれないレビューは無効として扱われます。必ず以下の形式のJSONを含めてください。**
 
+**ID再利用の約束**: プロンプトに「前回（iteration N-1）のFB」セクションが含まれる場合、**前回のIDを必ずそのまま再利用すること**。
+- 前回ART-001が今回解消されていれば、**ART-001のままで** `resolved: true` を出力
+- 前回ART-001が未解消なら、**ART-001のままで** `resolved: false` を継続
+- 新規指摘のみ新IDを使用（例: 前回3件あれば ART-004 から）
+
 出力例1（major指摘あり）:
 ```json
 {"issues": [{"id": "ART-001", "category": "style", "detail": "です・ます比率が63%で閾値80%未満", "severity": "major", "resolved": false}, {"id": "ART-002", "category": "flow", "detail": "シナリオBとCの構成が同一パターン", "severity": "minor", "resolved": false}]}

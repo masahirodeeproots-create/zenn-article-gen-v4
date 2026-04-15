@@ -85,6 +85,11 @@ customizable_sections:
 
 **JSONブロックが含まれないレビューは無効として扱われます。必ず以下の形式のJSONを含めてください。**
 
+**ID再利用の約束**: プロンプトに「前回（iteration N-1）のFB」セクションが含まれる場合、**前回のIDを必ずそのまま再利用すること**。
+- 前回MAT-001が今回解消されていれば、**MAT-001のままで** `resolved: true` を出力
+- 前回MAT-001が未解消なら、**MAT-001のままで** `resolved: false` を継続
+- 新規指摘のみ新IDを使用（例: 前回3件あれば MAT-004 から）
+
 出力例1（問題あり）:
 ```json
 {"issues": [{"id": "MAT-001", "category": "depth", "detail": "失敗エピソードが表面的", "severity": "major", "resolved": false}]}
