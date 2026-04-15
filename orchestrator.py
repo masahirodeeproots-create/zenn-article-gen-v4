@@ -827,7 +827,8 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
         strat = PROJECT_ROOT / "strategy.md"
         if strat.exists():
             prompt += f"## 戦略\n\n{strat.read_text(encoding='utf-8')}\n\n"
-        for fn in ["trends.md", "reader_pains.md"]:
+        # trend_research.md も参照（Agent Editorが生成した trend_searcher が書く場合あり）
+        for fn in ["trends.md", "trend_research.md", "reader_pains.md"]:
             kp = KNOWLEDGE_DIR / fn
             if kp.exists():
                 content = kp.read_text(encoding="utf-8")[:5000]
@@ -908,7 +909,11 @@ def build_eval_adjustment_prompt(eval_criteria_path: Path, latest_scores: list, 
 
 def build_consolidator_prompt() -> str:
     sg = STYLE_MEMORY_DIR / "style_guide.md"
-    return f"あなたはConsolidatorです。\n\n{sg} を読んで、内容を維持したまま200行以内に圧縮してください。\n上書き保存してください。\n"
+    content = sg.read_text(encoding="utf-8") if sg.exists() else ""
+    return (f"あなたはConsolidatorです。\n\n"
+            f"以下のstyle_guide.mdを200行以内に圧縮してください。内容（ルールの意味）は維持してください。\n\n"
+            f"## 現在のstyle_guide.md\n\n{content}\n\n"
+            f"## 出力\n圧縮後のstyle_guide.md全文（「# Style Guide」ヘッダーから開始）を出力してください。\n")
 
 
 # ============================================================
@@ -1037,7 +1042,22 @@ def call_strategist_retrospective(state: RunState):
 def call_strategist_escalation(phase_name: str, state: RunState, scores: list,
                                 iteration: int, fb_diff: dict = None) -> str:
     latest_review = ""
-    if "material" in phase_name:
+    if iteration == -1:
+        # iteration=-1（cannot_resolve経由）: 最新のレビューをglobで探す
+        if "material" in phase_name:
+            reviews = sorted(MATERIAL_REVIEWS_DIR.glob("review_*.md"),
+                             key=lambda p: p.stat().st_mtime, reverse=True)
+            if reviews:
+                latest_review = reviews[0].read_text(encoding="utf-8")
+        else:
+            iter_dirs = sorted([d for d in ITERATIONS_DIR.iterdir() if d.is_dir() and d.name.isdigit()],
+                               key=lambda d: int(d.name), reverse=True)
+            for d in iter_dirs:
+                rp = d / "review.md"
+                if rp.exists():
+                    latest_review = rp.read_text(encoding="utf-8")
+                    break
+    elif "material" in phase_name:
         rp = MATERIAL_REVIEWS_DIR / f"review_{iteration}.md"
         if rp.exists():
             latest_review = rp.read_text(encoding="utf-8")
@@ -1217,6 +1237,14 @@ def _save_agent_output(agent_name: str, output: str):
         if not (MATERIALS_DIR / "reader_pain.md").exists():
             (MATERIALS_DIR / "reader_pain.md").write_text(
                 pain_part if pain_part.strip() else output[:2000], encoding="utf-8")
+        # knowledge/trends.md と reader_pains.md にも追記（蓄積基盤として次回runが参照）
+        timestamp = datetime.now().strftime("%Y-%m-%d")
+        if trend_part.strip():
+            with open(KNOWLEDGE_DIR / "trends.md", "a", encoding="utf-8") as f:
+                f.write(f"\n---\n### {timestamp}: 自動蓄積（trend_searcher）\n\n{trend_part[:3000]}\n")
+        if pain_part.strip():
+            with open(KNOWLEDGE_DIR / "reader_pains.md", "a", encoding="utf-8") as f:
+                f.write(f"\n---\n### {timestamp}: 自動蓄積（trend_searcher）\n\n{pain_part[:2000]}\n")
 
     elif agent_name == "dev_simulator":
         # テンプレート指定: sim_log.md + sim_highlights.md + sim_metadata.json の3ファイル
@@ -1343,7 +1371,9 @@ def execute_pdca_loop(phase: dict, registry: AgentRegistry, state: RunState):
 
         # cannot_resolve自動アクション
         if result.get("cannot_resolve_actions"):
-            handle_cannot_resolve(result["cannot_resolve_actions"], phase, registry, state)
+            if handle_cannot_resolve(result["cannot_resolve_actions"], phase, registry, state):
+                log(f"[{pn}] ABORT via cannot_resolve — stopping")
+                break
 
         # 成功判定
         if threshold and consecutive_above_threshold(scores, threshold, required=2):
@@ -1752,8 +1782,10 @@ def parse_updater_response(updater_output: str) -> list:
     return parsed.get("response_report", []) if isinstance(parsed, dict) else []
 
 
-def handle_cannot_resolve(actions: list, phase: dict, registry: AgentRegistry, state: RunState):
+def handle_cannot_resolve(actions: list, phase: dict, registry: AgentRegistry, state: RunState) -> bool:
+    """Returns True if ABORT escalation occurred, signaling phase termination."""
     pn = phase["name"]
+    aborted = False
     for action in actions:
         reason = action.get("reason", "")
         if reason == "material_shortage":
@@ -1766,7 +1798,8 @@ def handle_cannot_resolve(actions: list, phase: dict, registry: AgentRegistry, s
             else:
                 if not state.is_escalated(pn):
                     state.mark_escalated(pn)
-                    handle_escalation(phase, registry, state, state.get_scores(pn), -1)
+                    if handle_escalation(phase, registry, state, state.get_scores(pn), -1):
+                        aborted = True
         elif reason == "eval_mismatch":
             fm = filter_agent_memory(state.article_type, limit=5)
             call_agent_with_retry("eval_designer", build_eval_adjustment_prompt(
@@ -1774,9 +1807,11 @@ def handle_cannot_resolve(actions: list, phase: dict, registry: AgentRegistry, s
         elif reason == "strategy_level":
             if not state.is_escalated(pn):
                 state.mark_escalated(pn)
-                handle_escalation(phase, registry, state, state.get_scores(pn), -1)
+                if handle_escalation(phase, registry, state, state.get_scores(pn), -1):
+                    aborted = True
             else:
                 state.log.append(f"[{pn}] strategy_level but escalation used — continuing")
+    return aborted
 
 
 # ============================================================
@@ -1819,9 +1854,14 @@ def execute_escalation_action(action: str, phase: dict, registry: AgentRegistry,
         call_agent_with_retry("eval_designer", build_eval_adjustment_prompt(
             PROJECT_ROOT / "eval_criteria.md", state.get_scores(pn), fm), state=state)
     elif action == "MATERIAL_FALLBACK":
-        mp = find_phase_by_name(load_workflow(), "material_review")
-        if mp:
-            execute_pdca_loop(mp, registry, state)
+        fbc = state.material_fallback_count.get(pn, 0)
+        if fbc < 1:
+            state.material_fallback_count[pn] = fbc + 1
+            mp = find_phase_by_name(load_workflow(), "material_review")
+            if mp:
+                execute_pdca_loop(mp, registry, state)
+        else:
+            log(f"[{pn}] MATERIAL_FALLBACK limit reached, skipping")
     elif action == "ADD_AGENT":
         sa = identify_stagnant_axes(state, pn)
         call_agent_with_retry("agent_editor", build_add_agent_prompt(PROJECT_ROOT / "strategy.md", sa), state=state)
@@ -2056,12 +2096,15 @@ def cmd_feedback(run_id: str, feedback_text: str):
     fb_text = fb_log_path.read_text(encoding="utf-8") if fb_log_path.exists() else ""
     mem = _load_yaml(mp)
 
+    # 一時stateでトークン計測をサポート
+    temp_state = RunState(run_id=run_id, user_instruction=feedback_text)
+
     prompt = (f"あなたはStrategist（フィードバックモード）です。\n\n{read_agent_definition('strategist')}\n\n"
               f"## ユーザーフィードバック\n{feedback_text}\n\n"
               f"## 対象実行のメタデータ\n{json.dumps(mem, ensure_ascii=False, default=str)[:3000]}\n\n"
               f"## 評価基準\n{ec[:3000]}\n\n## FB構造化ログ\n{fb_text[:3000]}\n\n"
               f"## 出力\nhuman_feedbackのYAMLを出力してください。\n")
-    output = call_agent_with_retry("strategist", prompt)
+    output = call_agent_with_retry("strategist", prompt, state=temp_state)
     fd = {"raw": feedback_text}
     try:
         ym = re.search(r"```yaml\s*\n(.*?)\n```", output, re.DOTALL)
@@ -2073,6 +2116,8 @@ def cmd_feedback(run_id: str, feedback_text: str):
         pass
     update_human_feedback(run_id, fd)
     log(f"Feedback recorded for run {run_id}")
+    tu = temp_state.token_usage
+    log(f"Feedback tokens: {tu['total_input_tokens']} in / {tu['total_output_tokens']} out / ${tu['total_cost_usd']:.4f}")
 
 
 def cmd_history(limit: int = 10, detail: bool = False):
