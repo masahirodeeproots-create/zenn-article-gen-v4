@@ -69,6 +69,8 @@ customizable_sections:
 - `article_review`フェーズには必ず`style_guide_updater`を含めること
 - 全`agents`の名前が`agents/generated/`に対応するファイルを持つこと
 - **`article_writing`フェーズは作らないこと**。Writer初稿は`article_review`の最初のイテレーションで生成される
+- **writer.mdの出力先は `iterations/{N}/article.md` を指定すること**。`materials/draft.md` などの素材領域に記事を書かないこと（素材と記事成果物が混在してしまうため）
+- **article_reviewer.md / style_guide_updater.md の入力で参照する記事ファイルは `iterations/{N}/article.md` を指定すること**。`materials/draft.md` は使わない
 
 ### 動的生成のフロー
 

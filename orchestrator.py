@@ -804,7 +804,11 @@ def build_agent_prompt(agent_name: str, agent_def: dict, state: RunState) -> str
         for f in sorted((MATERIALS_DIR / "fixed").glob("*.md")):
             prompt += f"## 素材: fixed/{f.name}\n\n{f.read_text(encoding='utf-8')}\n\n"
         # materials/直下の全.mdファイル（fixed/配下は上で処理済み、globは直下のみ）
+        # 記事そのもの系ファイル（Agent Editor生成のwriter.mdが誤って作るdraft.md等）は除外
+        _writer_excluded_materials = {"draft.md", "article.md"}
         for f in sorted(MATERIALS_DIR.glob("*.md")):
+            if f.name in _writer_excluded_materials or f.name.startswith("article_"):
+                continue
             content = f.read_text(encoding="utf-8")
             prompt += f"## 素材: {f.name}\n\n{content}\n\n"
 
